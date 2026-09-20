@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="hi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#128C7E">
+<link rel="manifest" href="manifest.json">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>PDBGA Study Attendance</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f2f5f5;color:#172121}
+header{background:#128C7E;color:white;padding:16px;text-align:center;position:sticky;top:0;z-index:5}
+h1{margin:0;font-size:21px}.wrap{max-width:700px;margin:auto;padding:12px}
+.card{background:white;border-radius:16px;padding:14px;margin:10px 0;box-shadow:0 2px 10px #0001}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row>*{flex:1}
+button,select,input{font-size:16px;border-radius:10px;border:1px solid #ccd5d5;padding:10px}
+button{background:#128C7E;color:white;border:0;font-weight:bold;cursor:pointer}
+button.secondary{background:#e8eeee;color:#17403d}button.danger{background:#d9534f}
+.small{font-size:13px;color:#657070}.timer{font-size:36px;text-align:center;font-weight:bold;margin:8px 0}
+.student{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid #eee}
+.student .name{flex:1;cursor:pointer;font-weight:bold}.status{display:flex;gap:5px}.status button{padding:8px 10px;font-size:13px}.present{background:#168a55}.absent{background:#d9534f}.off{background:#e8eeee;color:#333}
+.top{border-radius:14px;padding:12px;margin:8px 0;background:#fff4c7}.top b{font-size:18px}
+#toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#222;color:white;padding:10px 14px;border-radius:10px;display:none}
+</style>
+</head>
+<body>
+<header><h1>📚 PDBGA Study Attendance</h1></header>
+<div class="wrap">
+
+<div class="card">
+  <div class="row">
+    <div><b>तारीख</b><br><input id="date" type="date"></div>
+    <div><b>कौन-सा समय लगाना है?</b><br><select id="hour" style="width:100%;font-weight:bold"></select></div>
+  </div>
+</div>
+
+<div class="card">
+  <b>🏁 Challenge / Study Timer</b>
+  <div class="timer" id="timer">06:00:00</div>
+  <div class="row">
+    <div><b>Challenge कितने घंटे?</b><br><select id="duration"></select></div>
+    <button onclick="applyDuration()">Timer Set</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <div><b>Start Hour</b><br><select id="startHour"></select></div>
+    <div><b>End Hour</b><br><select id="endHour"></select></div>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <button onclick="startChallenge()">▶️ Challenge Start</button>
+    <button class="secondary" onclick="pauseTimer()">Pause</button>
+    <button class="secondary" onclick="endChallenge()">🏁 End Challenge</button>
+  </div>
+  <div class="small">Start और End के बीच के सभी hourly slots का score जुड़ेगा। जो student देर से आएगा, उसके पहले वाले घंटे Absent रहेंगे, इसलिए उसका प्रतिशत कम होगा। End Challenge दबाते ही पूरे challenge का Top 3 अपने-आप बनेगा।</div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <button onclick="addStudent()">➕ Student जोड़ें</button>
+    <button class="secondary" onclick="shareWhatsApp()">📲 WhatsApp</button>
+    <button class="secondary" onclick="exportCSV()">📄 CSV</button>
+  </div>
+</div>
+
+<div class="card">
+  <b>📋 हर घंटे की अलग Attendance</b>
+  <div class="small">हर Hour का Present/Absent अलग सेव होगा। किसी एक घंटे की attendance दूसरे घंटे में नहीं बदलेगी।</div>
+  <div id="students"></div>
+</div>
+
+<div class="card">
+  <div class="row">
+    <button onclick="showTop3()">🏆 Top 3 Winners</button>
+    <button class="secondary" onclick="shareTop3()">🎉 Winners WhatsApp</button>
+  </div>
+  <div id="top3"></div>
+</div>
+
+</div>
+<div id="toast"></div>
+
+<script>
+const KEY='pdbga_attendance_v3';
+let data=JSON.parse(localStorage.getItem(KEY)||'null')||{students:['Student 1','Student 2','Student 3','Student 4','Student 5'],attendance:{}};
+let timerSec=21600, running=false, timerId=null;
+
+const dateEl=document.getElementById('date'), hourEl=document.getElementById('hour');
+dateEl.value=new Date().toISOString().slice(0,10);
+for(let i=1;i<=24;i++){
+  let o=document.createElement('option');
+  o.value=i;
+  o.textContent=timeSlotLabel(i);
+  hourEl.appendChild(o);
+}
+hourEl.value=1;
+
+function timeSlotLabel(h){
+  const start=h%24, end=(h+1)%24;
+  return hourLabel(start)+' – '+hourLabel(end);
+}
+function save(){localStorage.setItem(KEY,JSON.stringify(data))}
+function key(){return dateEl.value+'|'+hourEl.value}
+function toast(s){let t=document.getElementById('toast');t.textContent=s;t.style.display='block';setTimeout(()=>t.style.display='none',1800)}
+function render(){
+ const k=key(); if(!data.attendance[k]) data.attendance[k]={};
+ const box=document.getElementById('students'); box.innerHTML='';
+ const title=document.createElement('div');
+ title.style.cssText='margin:10px 0;font-weight:bold;font-size:18px';
+ title.textContent='⏰ '+timeSlotLabel(Number(hourEl.value))+' की Attendance';
+ box.appendChild(title);
+
+ data.students.forEach((n,i)=>{
+  const st=data.attendance[k][n]||'';
+  const div=document.createElement('div');div.className='student';
+  div.innerHTML=`<div class="name" title="नाम बदलें">${esc(n)}</div>
+  <div class="status">
+   <button class="${st==='P'?'present':'off'}">Present</button>
+   <button class="${st==='A'?'absent':'off'}">Absent</button>
+  </div>`;
+  div.querySelector('.name').onclick=()=>editStudent(i);
+  const bs=div.querySelectorAll('button');
+  bs[0].onclick=()=>setStatus(n,'P'); bs[1].onclick=()=>setStatus(n,'A');
+  box.appendChild(div);
+ });
+ save();
+}
+function esc(s){return s.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))}
+function setStatus(n,s){let k=key();data.attendance[k]??={};data.attendance[k][n]=s;save();render()}
+function addStudent(){let n=prompt('Student का नाम लिखें:');if(n&&n.trim()){data.students.push(n.trim());save();render()}}
+function editStudent(i){let n=prompt('नाम बदलें:',data.students[i]);if(n&&n.trim()&&n.trim()!=data.students[i]){
+ let old=data.students[i], nn=n.trim(); data.students[i]=nn;
+ for(const k in data.attendance) if(data.attendance[k]&&data.attendance[k][old]){data.attendance[k][nn]=data.attendance[k][old];delete data.attendance[k][old]}
+ save();render();
+}}
+const durationEl=document.getElementById('duration');
+const startHourEl=document.getElementById('startHour');
+const endHourEl=document.getElementById('endHour');
+let challengeActive=false;
+
+for(let i=1;i<=24;i++){
+  let o=document.createElement('option'); o.value=i; o.textContent=i+' घंटे'; durationEl.appendChild(o);
+  let sh=document.createElement('option'); sh.value=i; sh.textContent=hourLabel(i); startHourEl.appendChild(sh);
+  let eh=document.createElement('option'); eh.value=i; eh.textContent=hourLabel(i); endHourEl.appendChild(eh);
+}
+durationEl.value=6; startHourEl.value=10; endHourEl.value=16;
+
+function hourLabel(h){
+  let x=h%24, ap=x<12?'AM':'PM', hh=x%12||12;
+  return hh+' '+ap;
+}
+function applyDuration(){setTimer(Number(durationEl.value));toast(durationEl.value+' घंटे का timer सेट')}
+
+function challengeHours(){
+  let st=Number(startHourEl.value), en=Number(endHourEl.value);
+  let hours=[], h=st;
+  while(h!==en && hours.length<24){ hours.push(h); h=h%24+1; }
+  return hours;
+}
+function startChallenge(){
+  let hs=challengeHours();
+  if(!hs.length){alert('Start और End Hour अलग रखें।');return;}
+  durationEl.value=hs.length;
+  setTimer(hs.length);
+  challengeActive=true;
+  startTimer();
+  hourEl.value=hs[0];
+  render();
+  toast('Challenge शुरू: '+timeSlotLabel(hs[0])+' → '+hourLabel(Number(endHourEl.value)));
+}
+function endChallenge(){
+  pauseTimer();
+  challengeActive=false;
+  showChallengeResults(true);
+  toast('🏁 Challenge खत्म — Top 3 तैयार');
+}
+function setTimer(h){pauseTimer();timerSec=h*3600;updateTimer();toast(h+' घंटे का timer सेट')}
+function startTimer(){if(running)return;running=true;timerId=setInterval(()=>{if(timerSec>0){timerSec--;updateTimer()}else{pauseTimer();alert('🎉 Timer पूरा!')}},1000)}
+function pauseTimer(){running=false;if(timerId){clearInterval(timerId);timerId=null}}
+function resetTimer(){pauseTimer();timerSec=21600;updateTimer()}
+function updateTimer(){let h=Math.floor(timerSec/3600),m=Math.floor(timerSec%3600/60),s=timerSec%60;document.getElementById('timer').textContent=[h,m,s].map(x=>String(x).padStart(2,'0')).join(':')}
+function hourSummary(){
+ let parts=[];
+ for(let h=1;h<=24;h++){
+  let a=data.attendance[dateEl.value+'|'+h]||{};
+  let p=data.students.filter(n=>a[n]==='P').length;
+  let done=data.students.filter(n=>a[n]==='P'||a[n]==='A').length;
+  parts.push(`<div style="padding:8px 0;border-bottom:1px solid #eee"><b>Hour ${h}</b> — ✅ ${p} Present / ❌ ${data.students.filter(n=>a[n]==='A').length} Absent <span class="small">(${done}/${data.students.length} marked)</span></div>`);
+ }
+ document.getElementById('top3').insertAdjacentHTML('beforeend','<div class="card"><b>📊 पूरे दिन का Hour-wise Update</b>'+parts.join('')+'</div>');
+}
+function challengeResults(){
+  const hs=challengeHours();
+  const totals={};
+  data.students.forEach(n=>totals[n]={present:0,marked:0});
+  hs.forEach(h=>{
+    const a=data.attendance[dateEl.value+'|'+h]||{};
+    data.students.forEach(n=>{
+      if(a[n]==='P') totals[n].present++;
+      if(a[n]==='P'||a[n]==='A') totals[n].marked++;
+    });
+  });
+  return Object.entries(totals).map(([name,v])=>({
+    name, present:v.present, total:hs.length,
+    pct:hs.length ? (v.present/hs.length*100) : 0
+  })).sort((a,b)=>b.present-a.present || b.pct-a.pct || a.name.localeCompare(b.name));
+}
+function showChallengeResults(auto=false){
+  const hs=challengeHours(), results=challengeResults(), box=document.getElementById('top3');
+  const shown=results.slice(0,3);
+  box.innerHTML='<h3>🏆 Challenge Result — '+hs.length+' घंटे</h3>'+
+    shown.map((x,i)=>`<div class="top">🏆 <b>${i+1}. ${esc(x.name)}</b><br>✅ ${x.present}/${x.total} Present — ${x.pct.toFixed(0)}%</div>`).join('')+
+    '<div class="small" style="margin-top:10px">Score सिर्फ चुने हुए Challenge Hours का है। देर से आने वाले student के पहले वाले hours Present नहीं गिने जाएंगे।</div>'+
+    '<h3>📊 Challenge में शामिल Hours</h3>'+hs.map(h=>`<span style="display:inline-block;background:#e8eeee;border-radius:8px;padding:6px;margin:3px">${timeSlotLabel(h)}</span>`).join('');
+}
+function allDayTotals(){ return challengeResults().slice(0,3).map(x=>[x.name,x.present]); }
+function showTop3(){ showChallengeResults(false); }
+
+function shareWhatsApp(){
+ let a=data.attendance[key()]||{}, lines=data.students.map(n=>`${a[n]==='P'?'✅':'❌'} ${n}`);
+ let txt=`📚 PDBGA Attendance\n📅 ${dateEl.value}\n⏰ Hour ${hourEl.value}\n\n${lines.join('\\n')}\n\n#PDBGA`;
+ window.open('https://wa.me/?text='+encodeURIComponent(txt),'_blank');
+}
+function shareTop3(){
+ let hs=challengeHours(), results=challengeResults().slice(0,3);
+ let txt=`🏆 PDBGA CHALLENGE TOP 3\n📅 ${dateEl.value}\n⏰ ${hourLabel(Number(startHourEl.value))} → ${hourLabel(Number(endHourEl.value))}\n\n`+
+ results.map((x,i)=>['🥇','🥈','🥉'][i]+' '+x.name+' — '+x.present+'/'+x.total+' Present ('+x.pct.toFixed(0)+'%)').join('\n')+
+ '\n\n🎉 Congratulations!';
+ window.open('https://wa.me/?text='+encodeURIComponent(txt),'_blank');
+}
+function exportCSV(){
+ let rows=[['Date','Hour','Student','Status']];
+ for(let h=1;h<=24;h++){let a=data.attendance[dateEl.value+'|'+h]||{};for(const n of data.students)rows.push([dateEl.value,h,n,a[n]==='P'?'Present':a[n]==='A'?'Absent':''])}
+ let csv=rows.map(r=>r.map(x=>`"${String(x).replace(/"/g,'""')}"`).join(',')).join('\\n');
+ let blob=new Blob([csv],{type:'text/csv'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='PDBGA_Attendance_'+dateEl.value+'.csv';a.click();URL.revokeObjectURL(u);
+}
+dateEl.onchange=render;hourEl.onchange=render;render();updateTimer();
+</script>
+<script>
+if ('serviceWorker' in navigator) window.addEventListener('load',()=>navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+</script></body>
+</html>
